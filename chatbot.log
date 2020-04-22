@@ -1,0 +1,2 @@
+{"asctime": "2020-04-22 17:46:56,012", "name": "core.message", "levelname": "INFO", "message": "this file has %d words", "run_duration": 0.9668381214141846}
+{"asctime": "2020-04-22 17:49:25,729", "name": "core.message", "levelname": "ERROR", "message": "division by zero", "exc_info": "Traceback (most recent call last):\n  File \"/home/antonio/Documents/estudos/bot2/core/message.py\", line 35, in proccess\n    Y = (10 / 0)\nZeroDivisionError: division by zero"}
