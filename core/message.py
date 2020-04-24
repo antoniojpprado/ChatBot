@@ -1,17 +1,15 @@
 import logging.config
 import numpy
 import os
-
-from psycopg2.extras import NamedTupleCursor
 import telegram
 import time
 from bot_webhook.settings import TOKEN
 from core.models import Contact, Interaction
+from datetime import datetime
 from django.db import connections
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from matplotlib import pyplot
 from matplotlib.font_manager import FontProperties
-import matplotlib.patches as mpatches
 from pythonjsonlogger import jsonlogger
 from tempfile import NamedTemporaryFile
 
@@ -117,7 +115,11 @@ def callback_graph(msg):
         ## Rodapé
         pyplot.xlabel(xlabel)
         pyplot.xticks(rotation=45, fontsize=6)
-        pyplot.figtext(0.89, 0.01, 'Gerado em 10/01/1980 12:00', horizontalalignment='right', fontsize=6)
+        pyplot.figtext(x=0.89,
+                       y=0.01,
+                       s='{}'.format(datetime.now().strftime('%d/%m/%Y %H:%M')),
+                       horizontalalignment='right',
+                       fontsize=6)
         ## Barras
         pyplot.legend(fontsize=6)
         # Apresentar o gráfico:
@@ -155,10 +157,16 @@ def callback_table(msg):
 
 
 def get_data(sql):
+    """
+    Obter dados na base do App Care.
+    :param sql: Query da ser executada.
+    :return: Lista dos dicionários com os dados.
+    """
+    # Estabelecer conexão e obter os dados:
     cur = connections['app'].cursor()
     cur.execute(sql)
     data = cur.fetchall()
-
+    # Gerar dicionário:
     fieldnames = [name[0] for name in cur.description]
     result = []
     for row in data:
@@ -166,18 +174,9 @@ def get_data(sql):
         for field in zip(fieldnames, row):
             rowset.append(field)
         result.append(dict(rowset))
-
+    # Encerrar:
     cur.close()
-
     return result
-
-
-def get_dataSAVE(sql):
-    cur = connections['app'].cursor()
-    cur.execute(sql)
-    data = cur.fetchall()
-    cur.close()
-    return data
 
 
 def login(msg):
