@@ -5,5 +5,5 @@ from core.views import event
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('event/', event),
+    path('event/', event, name='event'),
 ]
