@@ -89,24 +89,22 @@ def callback_graph(msg):
         dic = get_data(code)
         # Constrói a lista de dados para os eixos x e y:
         xaxis = []
-        yaxis = []
+        yaxis_a = []
+        yaxis_b = []
         for row in dic:
             xaxis.append('{:02d}:{:02d}'.format(row['time'].hour, row['time'].minute))
-            yaxis.append(row['point'])
+            yaxis_a.append(row['point'])
+            yaxis_b.append(row['out_point'])
         # Construir o gráfico de barras:
         exec(interaction.graph_labels, globals())  # Declarar title, xlabel e ylabel.
         xordem = numpy.arange(len(xaxis))
-        if interaction.type == 'Columns':
-            graph = pyplot.bar(xordem, yaxis, color='royalblue', alpha=0.7)
+        if interaction.type == 'Column':
+            pyplot.bar(xordem, yaxis_a, label='Ponta', color='red', alpha=0.7)
+            pyplot.bar(xordem, yaxis_b, label='Fora Ponta', color='royalblue', alpha=0.7, bottom=yaxis_a)
         else:
             raise ValueError('Interaction Type nao previsto: {}'.format(interaction.type))
         pyplot.xticks(xordem, xaxis)
         pyplot.grid(color='#95a5a6', linestyle='--', linewidth=2, axis='y', alpha=0.7)
-        # Definir cores em vermelho para horário de ponta:
-        rows = len(dic)
-        for i in range(rows):
-            if 4 <= dic[i]['time'].hour <= 6:
-                graph[i].set_color('r')
         # Criar as legendas:
         ## Logomarca
         logo = pyplot.imread('logo_equiplex.png')
@@ -121,9 +119,7 @@ def callback_graph(msg):
         pyplot.xticks(rotation=45, fontsize=6)
         pyplot.figtext(0.89, 0.01, 'Gerado em 10/01/1980 12:00', horizontalalignment='right', fontsize=6)
         ## Barras
-        blue_patch = mpatches.Patch(color='royalblue', label='Fora Ponta')
-        red_patch = mpatches.Patch(color='red', label='Ponta')
-        pyplot.legend(handles=[red_patch, blue_patch])
+        pyplot.legend(fontsize=6)
         # Apresentar o gráfico:
         msg_photo(msg)
 
