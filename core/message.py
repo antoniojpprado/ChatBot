@@ -135,25 +135,30 @@ def callback_table(msg):
     Apresentar tabela com os dados, relativo a opção escolhida.
     :param msg: Mensagem recebida
     """
-    # Obter o código da SQL query a ser consultada, na base de dados, e a executa:
-    interaction = Interaction.objects.get(input=msg['callback'])
-    code = interaction.code
-    dic = get_data(code)
-    # Construir a lista de dados:
-    pyplot.axis('off')
-    table_values = []
-    count = 0
-    for row in dic:
-        pyplot.title(label='Consumo', fontsize=14)
-        if count == 24:
-            # Construir e apresentar a tabela:
-            make_table(table_values)
-            msg_photo(msg)
-            # Iniciar nova lista de dados:
-            table_values = []
-            count = 0
-        table_values.append(['{:02d}:{:02d}'.format(row[0].hour, row[0].minute), row[1]])
-        count += 1
+    try:
+        # Obter o código da SQL query a ser consultada, na base de dados, e a executa:
+        interaction = Interaction.objects.get(input=msg['callback'])
+        dic = get_data(interaction.code)
+        # Construir a lista de dados:
+        pyplot.axis('off')
+        table_values = []
+        count = 0
+        for row in dic:
+            pyplot.title(label='Consumo', fontsize=14)
+            if count == 24:
+                # Construir e apresentar a tabela:
+                make_table(table_values)
+                msg_photo(msg)
+                # Iniciar nova lista de dados:
+                table_values = []
+                count = 0
+            table_values.append(['{:02d}:{:02d}'.format(row[0].hour, row[0].minute), row[1]])
+            count += 1
+
+    except Interaction.DoesNotExist:
+        logger.exception(
+            'Nao localizado o comando {} na base de dados. '
+            'Não é possível apresentar os dados para a geração da tabela.'.format(msg['callback']))
 
 
 def get_data(sql):
