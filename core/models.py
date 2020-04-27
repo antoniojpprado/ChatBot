@@ -22,12 +22,17 @@ class Interaction(models.Model):
         verbose_name="Code",
         help_text="Code or instruction to be execute"
     )
-    graph_labels = models.CharField(
-        max_length=100,
+    graph_labels = models.TextField(
         db_column="graph_labels",
         default="title='Informar Título'\nxlabel='Informar Label x'\nylabel='Informar Label y'",
         verbose_name="Title and labels",
         help_text="Title and labels for graph"
+    )
+    table_labels = models.TextField(
+        db_column="table_labels",
+        default="Informar",
+        verbose_name="Title and labels",
+        help_text="Title and labels for table"
     )
     type = models.CharField(
         max_length=30,
