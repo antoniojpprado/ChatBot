@@ -1,12 +1,15 @@
 import logging.config
 import numpy
 import os
+
+import pytz
 import telegram
 import time
 from bot_webhook.settings import TOKEN
 from core.models import Contact, Interaction
 from datetime import datetime
 from django.db import connections
+from pytz import timezone
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from matplotlib import pyplot
 from matplotlib.font_manager import FontProperties
@@ -50,10 +53,6 @@ def proccess(json_telegram):
             else:
                 msg_login(msg)
 
-        endtime = time.time()
-        duration = endtime - starttime
-        logger.info("Processando mensagem:", extra={"run_duration": duration})
-
     except Exception as error:
         logger.exception(error)
 
@@ -81,53 +80,36 @@ def callback_graph(msg):
     :param msg: Mensagem recebida
     """
     try:
-        # Obtem o código da SQL query a ser consultada, na base de dados, e a executa:
-        interaction = Interaction.objects.get(input=msg['callback'])
-        code = interaction.code
-        dic = get_data(code)
-        # Constrói a lista de dados para os eixos x e y:
+        # Obter o código da SQL query a ser consultada, na base de dados, e executar:
+        interaction = get_interaction(msg)
+        if interaction is None:
+            raise ValueError('Nao foi obtido a sql para a construcao do grafico.')
+        dic = get_data(sql=interaction.code, msg=msg)
+        if dic is None:
+            raise ValueError('Nao foram para a construcao do grafico - (callback_graph).')
+        # Construir a lista de dados para os eixos x e y:
+        timezone_client = get_timezone(msg)
         xaxis = []
         yaxis_a = []
         yaxis_b = []
         for row in dic:
-            xaxis.append('{:02d}:{:02d}'.format(row['time'].hour, row['time'].minute))
+            dt = row['time'].replace(tzinfo=pytz.utc).astimezone(pytz.timezone(timezone_client))
+            xaxis.append('{:02d}:{:02d}'.format(dt.hour, dt.minute))
             yaxis_a.append(row['point'])
             yaxis_b.append(row['out_point'])
-        # Construir o gráfico de barras:
-        exec(interaction.graph_labels, globals())  # Declarar title, xlabel e ylabel.
-        xordem = numpy.arange(len(xaxis))
-        if interaction.type == 'Column':
-            pyplot.bar(xordem, yaxis_a, label='Ponta', color='red', alpha=0.7)
-            pyplot.bar(xordem, yaxis_b, label='Fora Ponta', color='royalblue', alpha=0.7, bottom=yaxis_a)
-        else:
-            raise ValueError('Interaction Type nao previsto: {}'.format(interaction.type))
-        pyplot.xticks(xordem, xaxis)
-        pyplot.grid(color='#95a5a6', linestyle='--', linewidth=2, axis='y', alpha=0.7)
-        # Criar as legendas:
-        ## Logomarca
-        logo = pyplot.imread('logo_equiplex.png')
-        pyplot.figimage(logo, 30, 433)
-        ## Título
-        pyplot.title(title, fontsize=14)
-        pyplot.figtext(0.9, 0.9, dic[0]['equipment_name'], horizontalalignment='right', fontsize=8)
-        ## Valores
-        pyplot.ylabel(ylabel)
-        ## Rodapé
-        pyplot.xlabel(xlabel)
-        pyplot.xticks(rotation=45, fontsize=6)
-        pyplot.figtext(x=0.89,
-                       y=0.01,
-                       s='{}'.format(datetime.now().strftime('%d/%m/%Y %H:%M')),
-                       horizontalalignment='right',
-                       fontsize=6)
-        ## Barras
-        pyplot.legend(fontsize=6)
+        # Construir o gráfico:
+        make_graph(type=interaction.type,
+                   label=get_graph_labels(labels=interaction.graph_labels),
+                   xaxis=xaxis,
+                   yaxis_a=yaxis_a,
+                   yaxis_b=yaxis_b,
+                   msg=msg,
+                   dic=dic)
         # Apresentar o gráfico:
         msg_photo(msg)
 
     except ValueError as error:
         logger.exception(error)
-        raise
 
 
 def callback_table(msg):
@@ -136,52 +118,122 @@ def callback_table(msg):
     :param msg: Mensagem recebida
     """
     try:
-        # Obter o código da SQL query a ser consultada, na base de dados, e a executa:
-        interaction = Interaction.objects.get(input=msg['callback'])
-        dic = get_data(interaction.code)
+        # Obter o código da SQL query a ser consultada, na base de dados, e executar:
+        interaction = get_interaction(msg)
+        if interaction is None:
+            raise ValueError('Nao foi obtido a sql para a construcao da tabela.')
+
+        dic = get_data(sql=interaction.code, msg=msg)
+        if dic is None:
+            raise ValueError('Nao foram para a construcao da tabela - (callback_table).')
+
         # Construir a lista de dados:
+        timezone_client = get_timezone(msg)
+        label = get_table_labels(labels=interaction.table_labels)
         pyplot.axis('off')
         table_values = []
-        count = 0
         for row in dic:
-            pyplot.title(label='Consumo', fontsize=14)
-            if count == 24:
-                # Construir e apresentar a tabela:
-                make_table(table_values)
+            dt = row['time'].replace(tzinfo=pytz.utc).astimezone(pytz.timezone(timezone_client))
+            table_values.append(['{:02d}:{:02d}'.format(dt.hour, dt.minute),
+                                 row['out_point'],
+                                 row['point']])
+            if len(table_values) == 24:
+                make_table(table_values, equipment_name=dic[0]['equipment_name'], label=label)
                 msg_photo(msg)
-                # Iniciar nova lista de dados:
                 table_values = []
-                count = 0
-            table_values.append(['{:02d}:{:02d}'.format(row[0].hour, row[0].minute), row[1]])
-            count += 1
 
+    except ValueError as error:
+        logger.exception(error)
+
+
+def get_data(sql, msg=None):
+    """
+    Obter dados na base do App Care.
+    :param msg: Mensagem do contato.
+    :param sql: Query da ser executada.
+    :return: Lista dos dicionários com os dados.
+    """
+    try:
+        # Estabelecer conexão e obter os dados:
+        cur = connections['app'].cursor()
+        cur.execute(sql)
+        data = cur.fetchall()
+        # Gerar dicionário:
+        fieldnames = [name[0] for name in cur.description]
+        result = []
+        for row in data:
+            rowset = []
+            for field in zip(fieldnames, row):
+                rowset.append(field)
+            result.append(dict(rowset))
+        # Encerrar:
+        cur.close()
+        return result
+    except ValueError:
+        logger.exception('Nao foram obtidos dados com a sql: {}'.format(sql))
+        return None
+
+
+def get_interaction(msg):
+    """
+    Obtem a instrução a ser executada
+    :param msg: Mensagem do contato
+    :return: instrução
+    """
+    try:
+        # Obter o código da SQL query a ser consultada, na base de dados, e a executa:
+        interaction = Interaction.objects.get(input=msg['callback'])
+        return interaction
     except Interaction.DoesNotExist:
         logger.exception(
             'Nao localizado o comando {} na base de dados. '
             'Não é possível apresentar os dados para a geração da tabela.'.format(msg['callback']))
+        logger.exception(
+            'Nao localizado o comando {} na base de dados. '
+            'Não é possível apresentar os dados para a geração da tabela.'.format(msg['callback']))
+        return None
 
 
-def get_data(sql):
+def get_graph_labels(labels):
     """
-    Obter dados na base do App Care.
-    :param sql: Query da ser executada.
-    :return: Lista dos dicionários com os dados.
+    Declarar em dicionário, as variáveis e seus conteúdos definidos na base de dados'
+    :param labels: Registro graph_labels, na base de dados do chatbot.
+    :return: Dicionário contendo os dados.
     """
-    # Estabelecer conexão e obter os dados:
-    cur = connections['app'].cursor()
-    cur.execute(sql)
-    data = cur.fetchall()
-    # Gerar dicionário:
-    fieldnames = [name[0] for name in cur.description]
-    result = []
-    for row in data:
-        rowset = []
-        for field in zip(fieldnames, row):
-            rowset.append(field)
-        result.append(dict(rowset))
-    # Encerrar:
-    cur.close()
-    return result
+    exec(labels, globals())  # Declarar title, xlabel e ylabel.
+    label = {'title': title, 'xlabel': xlabel, 'ylabel': ylabel}
+    return label
+
+
+def get_table_labels(labels):
+    """
+    Declarar em dicionário, as variáveis e seus conteúdos definidos na base de dados'
+    :param labels: Registro graph_labels, na base de dados do chatbot.
+    :return: Dicionário contendo os dados.
+    """
+    exec(labels, globals())  # Declarar títulos das colunas.
+    col_labels = ['Data', 'Fora Ponta', 'Ponta']
+    return col_labels
+
+
+def get_timezone(msg):
+    """
+    Obtem o timezone definido para o cliente, em seu cadastro, em sua base de dados.
+    :param msg: Dados da mensagem do contato.
+    :return: O timezone do cliente.
+    """
+    try:
+        user_id = msg['user_id']
+        user = Contact.objects.get(user_id=user_id)
+        sql = "SELECT timezone " \
+              "FROM company " \
+              "INNER JOIN accounts_user ON company.company_id = accounts_user.company_id " \
+              "WHERE accounts_user.phone_number = '{}';".format(user.phone_number)
+        fuse = get_data(sql)
+    except Contact.DoesNotExist:
+        logger.exception('Nao foi localizado o usuario {} na banco de dados do ChatBot'.format(user_id))
+        return None
+    return fuse[0]['timezone']
 
 
 def login(msg):
@@ -222,17 +274,68 @@ def login(msg):
     return True
 
 
-def make_table(table_values):
+def make_graph(type, label, xaxis, yaxis_a, yaxis_b, msg, dic):
+    """
+    Construir um gráfico.
+    :param type: Tipos: column, pizza, ...
+    :param label: Labels
+    :param xaxis: Dados do eixo x.
+    :param yaxis_a: Dados do eixo y
+    :param yaxis_b: Dados do eixo y
+    :param msg: Mensagem do contato
+    :param dic: Dicionário com os dados do gráfico
+    """
+    try:
+        # Construir o gráfico de barras:
+        xordem = numpy.arange(len(xaxis))
+        if type == 'Column':
+            pyplot.bar(xordem, yaxis_a, label='Ponta', color='red', alpha=0.7)
+            pyplot.bar(xordem, yaxis_b, label='Fora Ponta', color='royalblue', alpha=0.7, bottom=yaxis_a)
+        else:
+            raise ValueError('Interaction Type nao previsto: {} em callback_graph()'.format(interaction.type))
+        pyplot.xticks(xordem, xaxis)
+        pyplot.grid(color='#95a5a6', linestyle='--', linewidth=2, axis='y', alpha=0.7)
+        # Legenda Logomarca
+        logo = pyplot.imread('logo_equiplex.png')
+        pyplot.figimage(logo, 30, 433)
+        # Legenda Título
+        pyplot.title(label['title'], fontsize=14)
+        pyplot.figtext(0.9, 0.9, dic[0]['equipment_name'], horizontalalignment='right', fontsize=8)
+        # Legenda Valores
+        pyplot.ylabel(label['ylabel'])
+        # Legenda Rodapé
+        pyplot.xlabel(label['xlabel'])
+        pyplot.xticks(rotation=45, fontsize=6)
+        fuso_horario = get_timezone(msg)
+        if fuso_horario is None:
+            raise ValueError('Fuso horario nao localizado na geracao do grafico em callback_graph().')
+        data_hora = datetime.now()
+        data_hora = data_hora.astimezone(timezone(fuso_horario))
+        data_hora = '{}'.format(data_hora.strftime('%d/%m/%Y %H:%M'))
+        pyplot.figtext(x=0.89,
+                       y=0.01,
+                       s=data_hora,
+                       horizontalalignment='right',
+                       fontsize=6)
+        # Legenda Barras
+        pyplot.legend(fontsize=6)
+
+    except ValueError as error:
+        logger.exception(error)
+
+
+def make_table(table_values, equipment_name, label):
     """
     Construir uma tabela.
-    :param table_values: Lista de valores que compõe a tabela.
+    :param equipment_name: Nome do equipamento.
+    :param table_values: Valores para a tabela.
+    :param label: Labels da tabela.
     :return: A tabela criada.
     """
     # Construir a tabela:
-    col_labels = ['Hora', 'Valor']
     table = pyplot.table(cellText=table_values,
-                         colWidths=[0.1] * 3,
-                         colLabels=col_labels,
+                         colWidths=[0.2] * 3,
+                         colLabels=label,
                          loc='center')
     table.auto_set_font_size(False)
     table.scale(4, 4)
@@ -244,16 +347,22 @@ def make_table(table_values):
     # Bold na primeira linha:
     cells[0, 0].set_text_props(fontproperties=FontProperties(weight='bold'))
     cells[0, 1].set_text_props(fontproperties=FontProperties(weight='bold'))
+    cells[0, 2].set_text_props(fontproperties=FontProperties(weight='bold'))
     # Tamanho das fontes:
     table.set_fontsize(24)
-    # Cores da tabela:
-    table[(0, 0)].set_facecolor('#c5d4e6')
-    table[(0, 1)].set_facecolor('#c5d4e6')
-    color = 'white'
+    # Cores células:
+    table[(0, 0)].set_facecolor('#B9D1F8')  # A primeira linha, cabeçalho, tem cor específica.
+    table[(0, 1)].set_facecolor('#B9D1F8')
+    table[(0, 2)].set_facecolor('#B9D1F8')
+    color = '#FFFFF8'
     for row in range(n_rows):
-        table[(row+1, 0)].set_facecolor(color)   # A primeira linha, cabeçalho, tem cor específica.
+        table[(row+1, 0)].set_facecolor(color)
         table[(row+1, 1)].set_facecolor(color)
-        color = '#e2e9f2' if color == 'white' else 'white'
+        table[(row+1, 2)].set_facecolor(color)
+        color = '#EBF0F8' if color == '#FFFFF8' else '#FFFFF8'
+    # Cores das bordas
+    for key, cell in table.get_celld().items():
+        cell.set_edgecolor('#9EB5DB')
     return table
 
 
@@ -268,6 +377,7 @@ def msg_handler(json_telegram):
         first_name = json_telegram['callback_query']['from']['first_name']
         last_name = json_telegram['callback_query']['from']['last_name']
         callback = json_telegram['callback_query']['data']
+
         if callback == 'start':
             option = callback
 
