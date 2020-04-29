@@ -34,12 +34,17 @@ class Interaction(models.Model):
         verbose_name="Title and labels",
         help_text="Title and labels for table"
     )
-    type = models.CharField(
-        max_length=30,
+    type = models.TextField(
         db_column="type",
         default='Column',
         verbose_name="Type of interation",
         help_text="Graph and Table interation type"
+    )
+    graph_style = models.TextField(
+        db_column="graph_style",
+        default="Informar",
+        verbose_name="Graph style",
+        help_text="Style of the graph"
     )
 
     def __str__(self):

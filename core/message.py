@@ -1,6 +1,7 @@
 import logging.config
 import numpy
 import os
+import matplotlib
 
 import pytz
 import telegram
@@ -80,6 +81,9 @@ def callback(msg):
         interaction = get_interaction(msg)
         if interaction is None:
             raise ValueError('Nao foi possivel atender a callback {}'.format(msg))
+        if interaction == 'start':
+            options_start(msg, msg_text=False)
+            return
         # Obter os dados:
         dic = get_data(sql=interaction.code)
         if dic is None:
@@ -94,11 +98,12 @@ def callback(msg):
             plt = make_graph(data=dic,
                              client_timezone=client_timezone,
                              graph_type=interaction.type,
-                             label=interaction.graph_labels)
+                             graph_style=interaction.graph_style,
+                             labels=interaction.graph_labels)
         else:
             plt = make_table(data=dic,
                              client_timezone=client_timezone,
-                             label=interaction.table_labels)
+                             labels=interaction.table_labels)
         # Apresentar:
         if plt:
             msg_callback(chat=msg['user_id'])
@@ -143,7 +148,10 @@ def get_interaction(msg):
     """
     try:
         # Obter o código da SQL query a ser consultada, na base de dados, e a executa:
-        interaction = Interaction.objects.get(input=msg['callback'])
+        if msg['callback'] == 'start':
+            interaction = 'start'
+        else:
+            interaction = Interaction.objects.get(input=msg['callback'])
         return interaction
     except Interaction.DoesNotExist:
         logger.exception(
@@ -151,26 +159,24 @@ def get_interaction(msg):
         return None
 
 
-def get_graph_labels(label):
+def get_labels_graph(labels):
     """
     Declarar em dicionário, as variáveis e seus conteúdos definidos na base de dados'
     :param label: Registro graph_labels, na base de dados do chatbot.
     :return: Dicionário contendo os dados.
     """
-    exec(label, globals())  # Declarar title, xlabel e ylabel.
-    label = {'title': title, 'xlabel': xlabel, 'ylabel': ylabel}
+    exec(labels, globals())
     return label
 
 
-def get_table_labels(label):
+def get_labels_table(labels):
     """
     Declarar em dicionário, as variáveis e seus conteúdos definidos na base de dados'
-    :param label: Registro graph_labels, na base de dados do chatbot.
+    :param labels: Registro graph_labels, na base de dados do chatbot.
     :return: Dicionário contendo os dados.
     """
-    exec(label, globals())  # Declarar títulos das colunas.
-    col_labels = [col_0, col_1, col_2]
-    return col_labels
+    exec(labels, globals())  # Declarar títulos das colunas.
+    return label
 
 
 def get_timezone(user):
@@ -230,7 +236,17 @@ def login(msg):
     return True
 
 
-def make_graph(data, client_timezone, graph_type, label):
+def make_footer(client_timezone, label):
+    data_hora = datetime.now()
+    data_hora = data_hora.astimezone(timezone(client_timezone))
+    data_hora = '{}'.format(data_hora.strftime('%d/%m/%Y %H:%M'))
+    pyplot.figtext(x=label['x_footer'],
+                   y=label['y_footer'],
+                   s=data_hora, horizontalalignment='right',
+                   fontsize=label['fontsize_footer'])
+
+
+def make_graph(data, client_timezone, graph_type, graph_style, labels):
     """
     Construir um gráfico.
     :param data: Dicionário com os dados
@@ -239,6 +255,8 @@ def make_graph(data, client_timezone, graph_type, label):
     :param label: Labels
     """
     try:
+        # Estilo do gráfico
+        pyplot.style.use(graph_style)
         # Construir a lista de dados para os eixos:
         xaxis = []
         yaxis_a = []
@@ -256,22 +274,27 @@ def make_graph(data, client_timezone, graph_type, label):
         else:
             raise ValueError('Interaction Type nao previsto: {} em callback_graph()'.format(graph_type))
         pyplot.xticks(xordem, xaxis)
-        pyplot.grid(color='#95a5a6', linestyle='--', linewidth=2, axis='y', alpha=0.7)
         # Obter legendas:
-        label = get_graph_labels(label=label)
+        label = get_labels_graph(labels=labels)
         # Cabeçalho
-        make_header(title=label['title'], equipment=data[0]['equipment_name'])
+        make_header(title=label['title'],
+                    equipment=data[0]['equipment_name'],
+                    x_suptitle=label['x_suptitle'],
+                    y_suptitle=label['y_suptitle'],
+                    x_title=label['x_title'],
+                    y_title=label['y_title'],
+                    logo=label['logo'],
+                    x_logo=label['x_logo'],
+                    y_logo=label['y_logo'])
         # Legenda Valores
         pyplot.ylabel(label['ylabel'])
         # Legenda Rodapé
         pyplot.xlabel(label['xlabel'])
         pyplot.xticks(rotation=45, fontsize=6)
-        data_hora = datetime.now()
-        data_hora = data_hora.astimezone(timezone(client_timezone))
-        data_hora = '{}'.format(data_hora.strftime('%d/%m/%Y %H:%M'))
-        pyplot.figtext(x=0.89, y=0.01, s=data_hora, horizontalalignment='right', fontsize=6)
         # Legenda Barras
         pyplot.legend(fontsize=6)
+        # Rodapé
+        make_footer(client_timezone=client_timezone, label=label)
         return True
 
     except ValueError as error:
@@ -279,34 +302,53 @@ def make_graph(data, client_timezone, graph_type, label):
         return None
 
 
-def make_header(title, equipment=None, fontsize_title=14, logo=True):
+def make_header(title,
+                equipment=None,
+                logo=None,
+                fontsize_suptitle=16,
+                fontsize_title=10,
+                x_suptitle=0.5,
+                y_suptitle=0.98,
+                x_title=0.9,
+                y_title=0.9,
+                x_logo=30,
+                y_logo=433):
+    pyplot.suptitle(title, x=x_suptitle, y=y_suptitle, fontsize=fontsize_suptitle)
     if logo:
         logo = pyplot.imread('logo_equiplex.png')
-        pyplot.figimage(logo, 30, 433)
-    pyplot.title(title, fontsize=fontsize_title)
+        pyplot.figimage(logo, x_logo, y_logo)
     if equipment:
-        pyplot.figtext(0.9, 0.9, equipment, horizontalalignment='right', fontsize=8)
+        pyplot.title(equipment, x=x_title, y=y_title, fontsize=fontsize_title)
 
 
-def make_table(data, client_timezone, label):
+def make_table(data, client_timezone, labels):
     """
     Construir uma tabela.
     :param data: Dicionário com os dados
     :param client_timezone: Timezone do contato cliente
-    :param label: Labels
+    :param labels: Labels
     """
     try:
         # Obter legendas:
-        label = get_table_labels(label=label)
+        label = get_labels_table(labels=labels)
         # Container da imagem:
-        fig, ax = pyplot.subplots(figsize=(10, 5))
+        fig = pyplot.figure(figsize=(10, 5))
         fig.subplots_adjust(top=3.5)
+        pyplot.subplot(1, 1, 1)
         # Cabeçalho
-        make_header(title=label[0],
-                    fontsize_title=28,
-                    logo=None)
+        make_header(title=label['title'],
+                    equipment=data[0]['equipment_name'],
+                    x_suptitle=label['x_suptitle'],
+                    y_suptitle=label['y_suptitle'],
+                    fontsize_suptitle=label['fontsize_suptitle'],
+                    x_title=label['x_title'],
+                    y_title=label['y_title'],
+                    fontsize_title=label['fontsize_title'],
+                    logo=label['logo'],
+                    x_logo=label['x_logo'],
+                    y_logo=label['y_logo'])
         # Construir a lista de dados:
-        ax.axis('off')
+        pyplot.axis('off')
         table_values = []
         for row in data:
             dt = row['time'].replace(tzinfo=pytz.utc).astimezone(pytz.timezone(client_timezone))
@@ -314,14 +356,14 @@ def make_table(data, client_timezone, label):
                                  row['out_point'],
                                  row['point']])
         # Construir a tabela:
-        table = ax.table(cellText=table_values,
-                             colWidths=[0.1] * 3,
-                             colLabels=label,
+        table = pyplot.table(cellText=table_values,
+                             colWidths=[0.15] * 3,
+                             colLabels=[label['col_0'], label['col_1'], label['col_2']],
                              colColours=['#B9D1F8'] * 3,
                              colLoc=['center', 'right', 'right'],
                              loc='center')
         table.auto_set_font_size(False)
-        table.scale(4, 4)
+        table.scale(2, 4)
         n_rows = len(table_values)
         # Centralizar primeira coluna:
         cells = table.properties()['celld']
@@ -342,6 +384,8 @@ def make_table(data, client_timezone, label):
         # Cores das bordas
         for key, cell in table.get_celld().items():
             cell.set_edgecolor('#9EB5DB')
+        # Rodapé
+        make_footer(client_timezone=client_timezone, label=label)
         return table
 
     except Exception as error:
@@ -359,6 +403,7 @@ def msg_callback(chat):
     pyplot.savefig(img, bbox_inches='tight', format='png')
     pyplot.show()
     bot.sendPhoto(chat_id=chat, photo=open(img, 'rb'))
+    pyplot.close()
     os.unlink(img)
 
 
